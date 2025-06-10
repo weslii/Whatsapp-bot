@@ -1,12 +1,29 @@
 // src/index.js
-require('dotenv').config();
+// Load environment variables first (only works locally with .env file)
+if (process.env.NODE_ENV !== 'production') {
+  require('dotenv').config();
+}
+
 const fs = require('fs');
 const path = require('path');
 const logger = require('./utils/logger');
+
+// Debug environment variables before loading database config
+console.log('🔍 Environment Debug:');
+console.log('NODE_ENV:', process.env.NODE_ENV);
+console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log('PGHOST exists:', !!process.env.PGHOST);
+console.log('POSTGRES_HOST exists:', !!process.env.POSTGRES_HOST);
+console.log('Railway env vars:', {
+  RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT,
+  RAILWAY_PROJECT_ID: !!process.env.RAILWAY_PROJECT_ID,
+  RAILWAY_SERVICE_ID: !!process.env.RAILWAY_SERVICE_ID
+});
+
+// Now load database after environment check
 const database = require('./config/database');
 const WhatsAppService = require('./services/WhatsAppService');
 const SchedulerService = require('./services/SchedulerService');
-
 
 class DeliveryBot {
   constructor() {

@@ -4,14 +4,44 @@ module.exports = {
   SALES_GROUP_ID: '120363418283053097@g.us',
   DELIVERY_GROUP_ID: '120363419001636636@g.us',
   
-  // Database Configuration
-  DATABASE: {
-    host: process.env.DB_HOST || 'localhost',
-    port: Number(process.env.DB_PORT) || 5432,
-    database: process.env.DB_NAME || 'wesleydb',
-    username: process.env.DB_USER || 'user',
-    password: process.env.DB_PASSWORD || 'wesleygreat'
-  },
+  // Database Configuration - Updated for Railway
+  DATABASE: (() => {
+    // Check for Railway DATABASE_URL first
+    if (process.env.DATABASE_URL) {
+      console.log('✅ Using Railway DATABASE_URL');
+      return {
+        connectionString: process.env.DATABASE_URL,
+        ssl: process.env.NODE_ENV === 'production' ? {
+          rejectUnauthorized: false
+        } : false
+      };
+    }
+    
+    // Check for Railway individual variables (alternative format)
+    if (process.env.PGHOST || process.env.POSTGRES_HOST) {
+      console.log('✅ Using Railway individual variables');
+      return {
+        host: process.env.PGHOST || process.env.POSTGRES_HOST,
+        port: Number(process.env.PGPORT || process.env.POSTGRES_PORT) || 5432,
+        database: process.env.PGDATABASE || process.env.POSTGRES_DB,
+        user: process.env.PGUSER || process.env.POSTGRES_USER,
+        password: process.env.PGPASSWORD || process.env.POSTGRES_PASSWORD,
+        ssl: {
+          rejectUnauthorized: false
+        }
+      };
+    }
+    
+    // Fallback to your custom environment variables for local development
+    console.log('⚠️ Using fallback local configuration');
+    return {
+      host: process.env.DB_HOST || 'localhost',
+      port: Number(process.env.DB_PORT) || 5432,
+      database: process.env.DB_NAME || 'wesleydb',
+      user: process.env.DB_USER || 'user',
+      password: process.env.DB_PASSWORD || 'wesleygreat'
+    };
+  })(),
   
   // Bot Configuration
   BOT: {

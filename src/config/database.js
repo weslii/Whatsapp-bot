@@ -2,14 +2,25 @@
 const { Pool } = require('pg');
 const config = require('./config');
 const logger = require('../utils/logger');
-console.log('Connecting with:', {
-  host: process.env.DB_HOST,
-  port: process.env.DB_PORT,
-  database: process.env.DB_NAME,
-  user: process.env.DB_USER,
-  password: process.env.DB_PASSWORD
-});
 
+// Debug environment variables
+console.log('Environment check:');
+console.log('DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log('DATABASE_URL preview:', process.env.DATABASE_URL ? process.env.DATABASE_URL.substring(0, 20) + '...' : 'undefined');
+console.log('NODE_ENV:', process.env.NODE_ENV);
+
+// Log connection info for debugging
+if (process.env.DATABASE_URL) {
+  console.log('Using Railway DATABASE_URL connection');
+} else {
+  console.log('Using individual environment variables:', {
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    database: process.env.DB_NAME,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD ? '***' : undefined
+  });
+}
 
 class Database {
   constructor() {
@@ -21,7 +32,8 @@ class Database {
 
   async connect() {
     try {
-      await this.pool.connect();
+      const client = await this.pool.connect();
+      client.release(); // Release the test connection
       logger.info('Database connected successfully');
       await this.initializeTables();
     } catch (error) {
