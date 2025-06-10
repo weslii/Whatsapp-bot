@@ -4,8 +4,8 @@
   "description": "WhatsApp Delivery Manager Bot",
   "main": "src/index.js",
   "scripts": {
-    "start": "node --max-old-space-size=512 --expose-gc index.js",
-    "dev": "nodemon --max-old-space-size=512 --expose-gc index.js"
+    "start": "node --max-old-space-size=512 --expose-gc src/index.js",
+    "dev": "nodemon --max-old-space-size=512 --expose-gc src/index.js"
   },
   "dependencies": {
     "dotenv": "^16.5.0",

@@ -1,8 +1,8 @@
 // src/config/config.js
 module.exports = {
   // WhatsApp Group IDs (Replace with your actual group IDs)
-  SALES_GROUP_ID: '120363418283053097@g.us',
-  DELIVERY_GROUP_ID: '120363419001636636@g.us',
+  SALES_GROUP_ID: '120363400576665531@g.us',
+  DELIVERY_GROUP_ID: '120363402699945348@g.us',
   
   // Database Configuration - Updated for Railway
   DATABASE: (() => {
