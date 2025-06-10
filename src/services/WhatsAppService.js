@@ -192,6 +192,14 @@ class WhatsAppService {
 
   async handleMessage(message) {
     try {
+      console.log(`📨 MESSAGE RECEIVED: "${message.body}"`);
+      console.log(`📋 Message details:`, {
+        from: message.from,
+        type: message.type,
+        hasMedia: message.hasMedia,
+        timestamp: new Date().toISOString()
+      });
+      
       const chat = await message.getChat();
       const contact = await message.getContact();
       
