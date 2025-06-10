@@ -14,16 +14,7 @@ class WhatsAppService {
       authStrategy: new LocalAuth(),
       puppeteer: {
         headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
-          '--disable-web-security',
-          '--disable-features=VizDisplayCompositor',
-          '--max-old-space-size=512',
-          '--memory-pressure-off'
-        ]
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
       }
     });
 
@@ -92,9 +83,6 @@ class WhatsAppService {
         console.log('\n✅ RAILWAY AUTHENTICATION SUCCESSFUL!');
         console.log('WhatsApp bot is now running on Railway.');
         console.log('Authentication has been saved for future deployments.\n');
-        
-        // Start memory monitoring for Railway
-        this.startMemoryMonitoring();
       }
     });
 
@@ -127,53 +115,6 @@ class WhatsAppService {
     });
   }
 
-  startMemoryMonitoring() {
-    setInterval(() => {
-      const memUsage = process.memoryUsage();
-      const memUsageMB = {
-        rss: Math.round(memUsage.rss / 1024 / 1024),
-        heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
-        heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
-        external: Math.round(memUsage.external / 1024 / 1024)
-      };
-      
-      logger.info('Memory usage (MB):', memUsageMB);
-      
-      // Warning if memory usage is high
-      if (memUsageMB.heapUsed > 400) {
-        logger.warn('High memory usage detected! Consider restarting soon.');
-        
-        // Force garbage collection if available
-        if (global.gc) {
-          global.gc();
-          logger.info('Forced garbage collection executed');
-        }
-      }
-      
-      // Critical memory usage - initiate graceful restart
-      if (memUsageMB.heapUsed > 450) {
-        logger.error('Critical memory usage! Initiating graceful restart...');
-        this.gracefulRestart();
-      }
-    }, 60000); // Check every minute
-  }
-
-  async gracefulRestart() {
-    try {
-      logger.info('Starting graceful restart due to memory pressure...');
-      
-      // Send notification to delivery group
-      await this.sendToDeliveryGroup('🔄 Bot restarting due to memory optimization. Will be back online shortly.');
-      
-      // Clean up and exit - Railway will automatically restart
-      await this.stop();
-      process.exit(0);
-    } catch (error) {
-      logger.error('Error during graceful restart:', error);
-      process.exit(1);
-    }
-  }
-
   async start() {
     try {
       if (this.isRailway) {
@@ -192,14 +133,6 @@ class WhatsAppService {
 
   async handleMessage(message) {
     try {
-      console.log(`📨 MESSAGE RECEIVED: "${message.body}"`);
-      console.log(`📋 Message details:`, {
-        from: message.from,
-        type: message.type,
-        hasMedia: message.hasMedia,
-        timestamp: new Date().toISOString()
-      });
-      
       const chat = await message.getChat();
       const contact = await message.getContact();
       
@@ -211,11 +144,6 @@ class WhatsAppService {
       // Handle delivery group messages (commands and replies)
       else if (chat.id._serialized === config.DELIVERY_GROUP_ID) {
         await this.handleDeliveryGroupMessage(message, contact);
-      }
-      
-      // Force garbage collection periodically
-      if (global.gc && Math.random() < 0.1) {
-        global.gc();
       }
     } catch (error) {
       logger.error('Error handling message:', error);
