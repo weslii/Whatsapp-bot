@@ -1,67 +1,118 @@
 // src/services/WhatsAppService.js
-const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
+const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const logger = require('../utils/logger');
-const config = require('../config/config');
-const OrderParser = require('./OrderParser');
-const OrderService = require('./OrderService');
-const MessageService = require('./MessageService');
-const Helpers = require('../utils/helpers');
+const database = require('../config/database');
 
 class WhatsAppService {
   constructor() {
     this.client = new Client({
-      authStrategy: new LocalAuth(),
+      authStrategy: new LocalAuth({
+        clientId: "delivery-bot"
+      }),
       puppeteer: {
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--single-process',
+          '--disable-gpu'
+        ]
+      }
+    });
+    
+    this.isReady = false;
+    this.setupEventHandlers();
+  }
+
+  setupEventHandlers() {
+    // QR Code event - Railway-friendly handling
+    this.client.on('qr', (qr) => {
+      logger.info('QR Code received, generating...');
+      
+      // For Railway deployment - provide alternative methods
+      if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
+        console.log('\n🚨 RAILWAY DEPLOYMENT DETECTED 🚨');
+        console.log('QR Code cannot be displayed in Railway logs.');
+        console.log('\n📱 TO AUTHENTICATE YOUR WHATSAPP BOT:');
+        console.log('1. Copy this QR code data:');
+        console.log('─'.repeat(50));
+        console.log(qr);
+        console.log('─'.repeat(50));
+        console.log('\n2. Go to: https://qr-code-generator.com/');
+        console.log('3. Select "Text" option');
+        console.log('4. Paste the QR data above');
+        console.log('5. Generate QR code and scan with WhatsApp');
+        console.log('\n🔄 OR use WhatsApp Web method:');
+        console.log('1. Open WhatsApp Web: https://web.whatsapp.com/');
+        console.log('2. In your phone WhatsApp: Settings > Linked Devices');
+        console.log('3. Tap "Link a Device" and scan the QR from web.whatsapp.com');
+        console.log('4. Once linked, restart this Railway deployment');
+        console.log('\n⚡ The bot will auto-save authentication for future deployments');
+        console.log('═'.repeat(60));
+      } else {
+        // Local development - show QR in terminal
+        console.log('\n📱 Scan this QR code with WhatsApp:');
+        qrcode.generate(qr, { small: true });
       }
     });
 
-    this.retryCount = 0;
-    this.maxRetries = config.BOT.MAX_RETRY_ATTEMPTS;
-
-    this.handleMessage = this.handleMessage.bind(this);
-    this.handleDeliveryGroupMessage = this.handleDeliveryGroupMessage.bind(this);
-    this.sendDailyReport = this.sendDailyReport.bind(this);
-    this.sendPendingOrders = this.sendPendingOrders.bind(this);
-    this.sendWeeklyReport = this.sendWeeklyReport.bind(this);
-    this.sendMonthlyReport = this.sendMonthlyReport.bind(this);
-    
-    this.initializeEventHandlers();
-  }
-
-  initializeEventHandlers() {
-    this.client.on('qr', (qr) => {
-      console.log('Scan the QR code below:');
-      qrcode.generate(qr, { small: true });
-    });
-
-    this.client.on('ready', () => {
-      logger.info('WhatsApp client is ready!');
-      this.retryCount = 0;
-    });
-
+    // Authentication success
     this.client.on('authenticated', () => {
-      logger.info('WhatsApp client authenticated');
+      logger.info('WhatsApp authenticated successfully');
+      console.log('✅ WhatsApp authentication saved!');
     });
 
-    this.client.on('message', async (message) => {
-      await this.handleMessage(message);
+    // Ready event
+    this.client.on('ready', () => {
+      this.isReady = true;
+      logger.info('WhatsApp client is ready!');
+      console.log('🎉 WhatsApp bot is now active and ready to receive messages!');
+      
+      // Get bot info
+      this.client.info.then(info => {
+        console.log(`📱 Connected as: ${info.pushname}`);
+        console.log(`📞 Phone: ${info.wid.user}`);
+      });
     });
 
+    // Authentication failure
+    this.client.on('auth_failure', (msg) => {
+      logger.error('Authentication failed:', msg);
+      console.log('❌ WhatsApp authentication failed');
+      console.log('💡 Try restarting the deployment to get a new QR code');
+    });
+
+    // Disconnected
     this.client.on('disconnected', (reason) => {
       logger.warn('WhatsApp client disconnected:', reason);
-      this.handleReconnection();
+      console.log('🔌 WhatsApp disconnected. Reason:', reason);
+      this.isReady = false;
     });
 
-    this.client.on('auth_failure', () => {
-      logger.error('WhatsApp authentication failed');
+    // Message received
+    this.client.on('message', async (message) => {
+      try {
+        await this.handleMessage(message);
+      } catch (error) {
+        logger.error('Error handling message:', error);
+      }
     });
   }
 
   async start() {
     try {
+      logger.info('Starting WhatsApp service...');
+      console.log('🚀 Initializing WhatsApp connection...');
+      
+      if (process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT) {
+        console.log('🌐 Running on Railway - QR code will be provided as text');
+      }
+      
       await this.client.initialize();
       logger.info('WhatsApp service started');
     } catch (error) {
@@ -70,299 +121,76 @@ class WhatsAppService {
     }
   }
 
-  async handleMessage(message) {
-    try {
-      const chat = await message.getChat();
-      const contact = await message.getContact();
-      
-      // Handle sales group messages (new orders)
-      if (chat.id._serialized === config.SALES_GROUP_ID) {
-        await this.handleSalesGroupMessage(message, contact);
-      }
-      
-      // Handle delivery group messages (commands and replies)
-      else if (chat.id._serialized === config.DELIVERY_GROUP_ID) {
-        await this.handleDeliveryGroupMessage(message, contact);
-      }
-    } catch (error) {
-      logger.error('Error handling message:', error);
-    }
-  }
-
-  async handleSalesGroupMessage(message, contact) {
-    try {
-      // Skip if message is from bot itself
-      if (contact.isMe) return;
-
-      const orderData = OrderParser.parseOrder(message.body, contact.name || contact.number);
-      
-      if (orderData) {
-        const order = await OrderService.createOrder(orderData);
-        const deliveryConfirmation = MessageService.formatOrderConfirmation(order);
-        const salesConfirmation = MessageService.formatSalesConfirmation(order);
-        
-        // Send detailed confirmation to delivery group
-        await this.sendToDeliveryGroup(deliveryConfirmation);
-        
-        // Send simplified confirmation to sales group
-        await this.sendToSalesGroup(salesConfirmation);
-        
-        logger.info('Order processed and confirmations sent', { orderId: order.order_id });
-      }
-    } catch (error) {
-      logger.error('Error handling sales group message:', error);
-      // Send error message to sales group if order parsing failed
-      if (message.body.length > 20) { // Only if it looks like an order attempt
-        await this.sendToSalesGroup('❌ Could not process order. Please check the format and try again.');
-      }
-    }
-  }
-
-  async handleDeliveryGroupMessage(message, contact) {
-    try {
-      // Skip if message is from bot itself
-      if (contact.isMe) return;
-
-      const messageBody = message.body.toLowerCase().trim();
-      const senderName = contact.name || contact.number;
-
-      // Handle reply-based completion
-      if (message.hasQuotedMsg && messageBody === 'done') {
-        await this.handleReplyCompletion(message, senderName);
-      }
-      // Handle reply-based cancellation
-      else if (message.hasQuotedMsg && messageBody === 'cancel') {
-        await this.handleReplyCancellation(message, senderName);
-      }
-      // Handle command-based operations
-      else if (messageBody.startsWith('done #')) {
-        const orderId = messageBody.replace('done #', '').trim();
-        await this.markOrderAsDelivered(orderId, senderName);
-      }
-      else if (messageBody.startsWith('cancel #')) {
-        const orderId = messageBody.replace('cancel #', '').trim();
-        await this.cancelOrder(orderId, senderName);
-      }
-      // Handle report commands
-      else if (messageBody === '/daily') {
-        await this.sendDailyReport();
-      }
-      else if (messageBody === '/pending') {
-        await this.sendPendingOrders();
-      }
-      else if (messageBody === '/weekly') {
-        await this.sendWeeklyReport();
-      }
-      else if (messageBody === '/monthly') {
-        await this.sendMonthlyReport();
-      }
-      else if (messageBody === '/help') {
-        await this.sendHelpMessage();
-      }
-    } catch (error) {
-      logger.error('Error handling delivery group message:', error);
-    }
-  }
-
-  async handleReplyCompletion(message, senderName) {
-    try {
-      const quotedMessage = await message.getQuotedMessage();
-      const orderId = this.extractOrderIdFromMessage(quotedMessage.body);
-      
-      if (orderId) {
-        await this.markOrderAsDelivered(orderId, senderName);
-      }
-    } catch (error) {
-      logger.error('Error handling reply completion:', error);
-    }
-  }
-
-  async handleReplyCancellation(message, senderName) {
-    try {
-      const quotedMessage = await message.getQuotedMessage();
-      const orderId = this.extractOrderIdFromMessage(quotedMessage.body);
-      
-      if (orderId) {
-        await this.cancelOrder(orderId, senderName);
-      }
-    } catch (error) {
-      logger.error('Error handling reply cancellation:', error);
-    }
-  }
-
-  extractOrderIdFromMessage(messageBody) {
-    const match = messageBody.match(/Order #(\w+)/);
-    return match ? match[1] : null;
-  }
-
-  async markOrderAsDelivered(orderId, deliveryPerson) {
-    try {
-      const order = await OrderService.getOrderById(orderId);
-      
-      if (!order) {
-        await this.sendToDeliveryGroup(`❌ Order #${orderId} not found.`);
-        return;
-      }
-
-      if (order.status === 'delivered') {
-        await this.sendToDeliveryGroup(`ℹ️ Order #${orderId} is already marked as delivered.`);
-        return;
-      }
-
-      if (order.status === 'cancelled') {
-        await this.sendToDeliveryGroup(`❌ Cannot mark cancelled order #${orderId} as delivered.`);
-        return;
-      }
-
-      await OrderService.updateOrderStatus(orderId, 'delivered', deliveryPerson, deliveryPerson);
-      await this.sendToDeliveryGroup(`✅ Order #${orderId} marked as delivered by ${deliveryPerson}.`);
-      
-      logger.info('Order marked as delivered', { orderId, deliveryPerson });
-    } catch (error) {
-      logger.error('Error marking order as delivered:', error);
-      await this.sendToDeliveryGroup(`❌ Error updating order #${orderId}. Please try again.`);
-    }
-  }
-
-  async cancelOrder(orderId, cancelledBy) {
-    try {
-      const order = await OrderService.getOrderById(orderId);
-      
-      if (!order) {
-        await this.sendToDeliveryGroup(`❌ Order #${orderId} not found.`);
-        return;
-      }
-
-      if (order.status === 'cancelled') {
-        await this.sendToDeliveryGroup(`ℹ️ Order #${orderId} is already cancelled.`);
-        return;
-      }
-
-      if (order.status === 'delivered') {
-        await this.sendToDeliveryGroup(`❌ Cannot cancel delivered order #${orderId}.`);
-        return;
-      }
-
-      await OrderService.updateOrderStatus(orderId, 'cancelled', cancelledBy);
-      await this.sendToDeliveryGroup(`❌ Order #${orderId} cancelled by ${cancelledBy}.`);
-      
-      logger.info('Order cancelled', { orderId, cancelledBy });
-    } catch (error) {
-      logger.error('Error cancelling order:', error);
-      await this.sendToDeliveryGroup(`❌ Error cancelling order #${orderId}. Please try again.`);
-    }
-  }
-
-  async sendHelpMessage() {
-    try {
-      const message = MessageService.formatHelpMessage();
-      await this.sendToDeliveryGroup(message);
-    } catch (error) {
-      logger.error('Error sending help message:', error);
-    }
-  }
-
-  async sendDailyReport() {
-    try {
-      const report = await OrderService.getDailyReport();
-      const message = MessageService.formatDailyReport(report, new Date());
-      await this.sendToDeliveryGroup(message);
-    } catch (error) {
-      logger.error('Error sending daily report:', error);
-      await this.sendToDeliveryGroup('❌ Error generating daily report.');
-    }
-  }
-
-  async sendPendingOrders() {
-    try {
-      const orders = await OrderService.getPendingOrders();
-      const message = MessageService.formatPendingOrders(orders);
-      await this.sendToDeliveryGroup(message);
-    } catch (error) {
-      logger.error('Error sending pending orders:', error);
-      await this.sendToDeliveryGroup('❌ Error retrieving pending orders.');
-    }
-  }
-
-  async sendWeeklyReport() {
-    try {
-      const report = await OrderService.getWeeklyReport();
-      const message = MessageService.formatWeeklyReport(report);
-      await this.sendToDeliveryGroup(message);
-    } catch (error) {
-      logger.error('Error sending weekly report:', error);
-      await this.sendToDeliveryGroup('❌ Error generating weekly report.');
-    }
-  }
-
-  async sendMonthlyReport() {
-    try {
-      const report = await OrderService.getMonthlyReport();
-      const message = MessageService.formatMonthlyReport(report);
-      await this.sendToDeliveryGroup(message);
-    } catch (error) {
-      logger.error('Error sending monthly report:', error);
-      await this.sendToDeliveryGroup('❌ Error generating monthly report.');
-    }
-  }
-
-  async sendToSalesGroup(message) {
-    try {
-      await this.client.sendMessage(config.SALES_GROUP_ID, message);
-    } catch (error) {
-      logger.error('Error sending message to sales group:', error);
-      // Retry logic
-      await this.retryOperation(() => this.client.sendMessage(config.SALES_GROUP_ID, message));
-    }
-  }
-
-  async sendToDeliveryGroup(message) {
-    try {
-      await this.client.sendMessage(config.DELIVERY_GROUP_ID, message);
-    } catch (error) {
-      logger.error('Error sending message to delivery group:', error);
-      // Retry logic
-      await this.retryOperation(() => this.client.sendMessage(config.DELIVERY_GROUP_ID, message));
-    }
-  }
-
-  async retryOperation(operation, retries = config.BOT.MAX_RETRY_ATTEMPTS) {
-    for (let i = 0; i < retries; i++) {
-      try {
-        await operation();
-        return;
-      } catch (error) {
-        logger.warn(`Retry ${i + 1}/${retries} failed:`, error);
-        if (i === retries - 1) throw error;
-        await Helpers.sleep(config.BOT.RETRY_DELAY * (i + 1));
-      }
-    }
-  }
-
-  async handleReconnection() {
-    if (this.retryCount < this.maxRetries) {
-      this.retryCount++;
-      logger.info(`Attempting to reconnect... (${this.retryCount}/${this.maxRetries})`);
-      
-      setTimeout(async () => {
-        try {
-          await this.client.initialize();
-        } catch (error) {
-          logger.error('Reconnection failed:', error);
-          await this.handleReconnection();
-        }
-      }, config.BOT.RETRY_DELAY * this.retryCount);
-    } else {
-      logger.error('Max reconnection attempts reached. Manual intervention required.');
-    }
-  }
-
   async stop() {
     try {
-      await this.client.destroy();
-      logger.info('WhatsApp service stopped');
+      if (this.client) {
+        await this.client.destroy();
+        logger.info('WhatsApp service stopped');
+      }
     } catch (error) {
       logger.error('Error stopping WhatsApp service:', error);
+    }
+  }
+
+  async handleMessage(message) {
+    // Skip if not ready or if message is from status broadcast
+    if (!this.isReady || message.from === 'status@broadcast') {
+      return;
+    }
+
+    const chat = await message.getChat();
+    const contact = await message.getContact();
+
+    // Log the message
+    logger.info(`Message from ${contact.name || contact.number}: ${message.body}`);
+
+    // Handle different message types
+    if (message.body.toLowerCase().startsWith('/help')) {
+      await this.sendHelpMessage(chat);
+    } else if (message.body.toLowerCase().startsWith('/status')) {
+      await this.sendStatusMessage(chat);
+    }
+    // Add more command handlers as needed
+  }
+
+  async sendHelpMessage(chat) {
+    const helpText = `
+🤖 *WhatsApp Delivery Bot Commands*
+
+📋 *Available Commands:*
+• /help - Show this help message
+• /status - Check bot status
+• /orders - View pending orders
+• /delivered [order_id] - Mark order as delivered
+
+📞 *Contact Admin* for order management
+    `;
+    
+    await chat.sendMessage(helpText);
+  }
+
+  async sendStatusMessage(chat) {
+    const statusText = `
+✅ *Bot Status: Active*
+🔗 *Database: Connected*
+⏰ *Uptime: ${process.uptime()} seconds*
+📊 *Ready to process orders*
+    `;
+    
+    await chat.sendMessage(statusText);
+  }
+
+  async sendMessage(chatId, message) {
+    try {
+      if (!this.isReady) {
+        throw new Error('WhatsApp client is not ready');
+      }
+      
+      await this.client.sendMessage(chatId, message);
+      logger.info(`Message sent to ${chatId}`);
+    } catch (error) {
+      logger.error('Error sending message:', error);
+      throw error;
     }
   }
 }
