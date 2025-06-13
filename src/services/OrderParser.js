@@ -2,6 +2,69 @@
 const logger = require('../utils/logger');
 
 class OrderParser {
+  static addressPatterns = [
+    /\d+.*(?:street|road|avenue|lane|close|way|estate|island|mainland)/i,
+    /(?:no\.|number)\s*\d+/i,
+    /\d+[,\s]/, // Starts with number and comma/space
+    /.{20,}/, // Longer text likely to be address
+    // Lagos Areas
+    /(?:lekki|ikoyi|ajah|victoria|island|mainland|surulere|yaba|ikeja|ogba|maryland|ogudu|ojota|ketu|magodo|oshodi|apapa|festac|amowo|odogunyan|ikorodu|badagry|ejigbo|ikotun|agidingbi|sangotedo|abraham|adesa|abijo|agungi|ajah|akodo|badore|banana|ikate|ilaje|ilasan|jakande|langbasa|osborne|sangotedo|vitoria)/i,
+    // Common Estate Names
+    /(?:phase|estate|garden|court|close|avenue|boulevard|drive|heights|park|plaza|terrace|villas|waters|woods)/i,
+    // Common Address Terms
+    /(?:block|flat|house|plot|road|street|way|zone|area|district|extension|layout|quarters|residence|settlement)/i,
+    // Common Nigerian Address Indicators
+    /(?:behind|beside|close to|near|opposite|after|before|by|off|on|at)/i,
+    // Common Landmarks
+    /(?:church|mosque|school|market|hospital|bank|mall|plaza|hotel|restaurant|junction|roundabout|bridge|expressway)/i,
+    // Add plaza pattern since it's in the example
+    /(?:plaza|complex|building|center|centre|mall)/i
+  ];
+
+  static itemPatterns = [
+    /(?:cake|food|pizza|burger|rice|chicken|beef|fish|drink|water|juice)/i,
+    /(?:jar|gift|box|package|item|order)/i, // Common item containers/terms
+    /\d+\s*(?:pack|piece|bottle|plate|portion)/i,
+    /(?:\d+\s*x\s*|\d+\s+)/, // Quantity indicators (optional)
+    // Add apology jar pattern since it's in the example
+    /(?:apology|sorry|thank you|birthday|anniversary)\s*(?:jar|gift|box|package)/i
+  ];
+
+  static namePatterns = [
+    /^[A-Za-z\s]{2,50}$/, // Letters and spaces only, reasonable length
+    /^[A-Za-z]+\s+[A-Za-z]+/ // At least two words
+  ];
+
+  static addressContinuationPatterns = [
+    /(?:phase|estate|garden|court|close|avenue|boulevard|drive|heights|park|plaza|terrace|villas|waters|woods)/i,
+    /(?:block|flat|house|plot|road|street|way|zone|area|district|extension|layout|quarters|residence|settlement)/i,
+    /(?:behind|beside|close to|near|opposite|after|before|by|off|on|at)/i,
+    /(?:church|mosque|school|market|hospital|bank|mall|plaza|hotel|restaurant|junction|roundabout|bridge|expressway)/i,
+    /(?:plaza|complex|building|center|centre|mall)/i
+  ];
+
+  static itemContinuationPatterns = [
+    /(?:and|with|plus|including|contains|comes with)/i,
+    /(?:pack|piece|bottle|plate|portion|set|box|jar|gift)/i,
+    /^\d+\s*(?:x|×|\*)\s*\d+/i, // Quantity patterns
+    /^\d+\s*(?:pack|piece|bottle|plate|portion)/i,
+    /(?:apology|sorry|thank you|birthday|anniversary)\s*(?:jar|gift|box|package)/i
+  ];
+
+  static datePatterns = [
+    /\d{1,2}\/\d{1,2}\/\d{4}/,
+    /\d{1,2}-\d{1,2}-\d{4}/,
+    /\d{4}-\d{1,2}-\d{1,2}/,
+    /(tomorrow|today)/i,
+    /(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i
+  ];
+
+  static nigerianPhonePatterns = [
+    /^0[789][01]\d{8}$/,  // 080, 090, 070
+    /^234[789][01]\d{8}$/, // 23480, 23490, 23470
+    /^\+234[789][01]\d{8}$/ // +23480, +23490, +23470
+  ];
+
   static parseOrder(messageBody, senderName) {
     try {
       const lines = messageBody.trim().split('\n').map(line => line.trim()).filter(line => line);
@@ -319,6 +382,8 @@ class OrderParser {
   }
 
   static isAddressContinuation(block, line) {
+    if (!block || !line) return false;
+
     const blockText = block.join(' ').toLowerCase();
     const lineText = line.toLowerCase();
 
@@ -329,18 +394,12 @@ class OrderParser {
 
     if (!isAddressBlock) return false;
 
-    // Check if new line could be part of the address
-    const addressContinuationPatterns = [
-      /(?:phase|estate|garden|court|close|avenue|boulevard|drive|heights|park|plaza|terrace|villas|waters|woods)/i,
-      /(?:block|flat|house|plot|road|street|way|zone|area|district|extension|layout|quarters|residence|settlement)/i,
-      /(?:behind|beside|close to|near|opposite|after|before|by|off|on|at)/i,
-      /(?:church|mosque|school|market|hospital|bank|mall|plaza|hotel|restaurant|junction|roundabout|bridge|expressway)/i
-    ];
-
-    return addressContinuationPatterns.some(pattern => pattern.test(lineText));
+    return this.addressContinuationPatterns.some(pattern => pattern.test(lineText));
   }
 
   static isItemContinuation(block, line) {
+    if (!block || !line) return false;
+
     const blockText = block.join(' ').toLowerCase();
     const lineText = line.toLowerCase();
 
@@ -351,61 +410,21 @@ class OrderParser {
 
     if (!isItemBlock) return false;
 
-    // Check if new line could be part of the items
-    const itemContinuationPatterns = [
-      /(?:and|with|plus|including|contains|comes with)/i,
-      /(?:pack|piece|bottle|plate|portion|set|box|jar|gift)/i,
-      /^\d+\s*(?:x|×|\*)\s*\d+/i, // Quantity patterns
-      /^\d+\s*(?:pack|piece|bottle|plate|portion)/i
-    ];
-
-    return itemContinuationPatterns.some(pattern => pattern.test(lineText));
+    return this.itemContinuationPatterns.some(pattern => pattern.test(lineText));
   }
 
   static assignRemainingFieldsWithContext(blocks) {
     const result = {};
     
-    // Patterns to identify field types
-    const namePatterns = [
-      /^[A-Za-z\s]{2,50}$/, // Letters and spaces only, reasonable length
-      /^[A-Za-z]+\s+[A-Za-z]+/ // At least two words
-    ];
-    
-    // ... existing code ...
-    const addressPatterns = [
-      /\d+.*(?:street|road|avenue|lane|close|way|estate|island|mainland)/i,
-      /(?:no\.|number)\s*\d+/i,
-      /\d+[,\s]/, // Starts with number and comma/space
-      /.{20,}/, // Longer text likely to be address
-      // Lagos Areas
-      /(?:lekki|ikoyi|ajah|victoria|island|mainland|surulere|yaba|ikeja|ogba|maryland|ogudu|ojota|ketu|magodo|oshodi|apapa|festac|amowo|odogunyan|ikorodu|badagry|ejigbo|ikotun|agidingbi|sangotedo|abraham|adesa|abijo|agungi|ajah|akodo|badore|banana|ikate|ilaje|ilasan|jakande|langbasa|osborne|sangotedo|vitoria)/i,
-      // Common Estate Names
-      /(?:phase|estate|garden|court|close|avenue|boulevard|drive|heights|park|plaza|terrace|villas|waters|woods)/i,
-      // Common Address Terms
-      /(?:block|flat|house|plot|road|street|way|zone|area|district|extension|layout|quarters|residence|settlement)/i,
-      // Common Nigerian Address Indicators
-      /(?:behind|beside|close to|near|opposite|after|before|by|off|on|at)/i,
-      // Common Landmarks
-      /(?:church|mosque|school|market|hospital|bank|mall|plaza|hotel|restaurant|junction|roundabout|bridge|expressway)/i,
-      // Common Nigerian Area Codes
-    ];
-    
-    const itemPatterns = [
-      /(?:cake|food|pizza|burger|rice|chicken|beef|fish|drink|water|juice)/i,
-      /(?:jar|gift|box|package|item|order)/i, // Common item containers/terms
-      /\d+\s*(?:pack|piece|bottle|plate|portion)/i,
-      /(?:\d+\s*x\s*|\d+\s+)/, // Quantity indicators (optional)
-    ];
-
     // Score each block based on its content and position
     const blockScores = blocks.map((block, index) => {
       const blockText = block.join(' ');
       return {
         block,
         index,
-        nameScore: this.calculatePatternScore(blockText, namePatterns),
-        addressScore: this.calculatePatternScore(blockText, addressPatterns),
-        itemScore: this.calculatePatternScore(blockText, itemPatterns),
+        nameScore: this.calculatePatternScore(blockText, this.namePatterns),
+        addressScore: this.calculatePatternScore(blockText, this.addressPatterns),
+        itemScore: this.calculatePatternScore(blockText, this.itemPatterns),
         // Position-based scoring
         positionScore: {
           name: index === 0 ? 2 : 0, // First block likely to be name
@@ -476,9 +495,13 @@ class OrderParser {
   }
 
   static calculatePatternScore(text, patterns) {
+    if (!text || !patterns || !Array.isArray(patterns)) {
+      return 0;
+    }
+
     let score = 0;
     for (const pattern of patterns) {
-      if (pattern.test(text)) {
+      if (pattern && pattern.test(text)) {
         score += 1;
       }
     }
@@ -486,9 +509,9 @@ class OrderParser {
   }
 
   static isPhoneNumber(str) {
-    // First, try to extract all potential phone numbers from the string
-    const potentialNumbers = this.extractPhoneNumbers(str);
-    return potentialNumbers.length > 0;
+    if (!str) return false;
+    const numbers = this.extractPhoneNumbers(str);
+    return numbers.length > 0;
   }
 
   static extractPhoneNumbers(str) {
@@ -513,31 +536,19 @@ class OrderParser {
   }
 
   static isValidPhoneNumber(number) {
+    if (!number) return false;
+    
     // Check length
     if (number.length < 10 || number.length > 15) {
       return false;
     }
     
-    // Check Nigerian number patterns
-    const nigerianPatterns = [
-      /^0[789][01]\d{8}$/,  // 080, 090, 070
-      /^234[789][01]\d{8}$/, // 23480, 23490, 23470
-      /^\+234[789][01]\d{8}$/ // +23480, +23490, +23470
-    ];
-    
-    return nigerianPatterns.some(pattern => pattern.test(number));
+    return this.nigerianPhonePatterns.some(pattern => pattern.test(number));
   }
 
   static isDateString(str) {
-    const datePatterns = [
-      /\d{1,2}\/\d{1,2}\/\d{4}/,
-      /\d{1,2}-\d{1,2}-\d{4}/,
-      /\d{4}-\d{1,2}-\d{1,2}/,
-      /(tomorrow|today)/i,
-      /(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i
-    ];
-    
-    return datePatterns.some(pattern => pattern.test(str));
+    if (!str) return false;
+    return this.datePatterns.some(pattern => pattern.test(str));
   }
 
   static parseDate(dateStr) {
